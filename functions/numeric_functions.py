@@ -391,6 +391,43 @@ def convert_dt_to_day(df):
     df['TransactionDay'] = df['TransactionDT'] / 86400
     return df
 
+def create_d_null_features(df, d_cols=None):
+    """
+    Creates an indicator feature (is_null) for each D column and a total null count.
+    Hypothesis: Missing values in D columns often signal first-time transactions/new users.
+    """
+    if d_cols is None:
+        d_cols = [f'D{i}' for i in range(1, 16)]
+    
+    df = df.copy()
+    existing_d = [c for c in d_cols if c in df.columns]
+    
+    # 1. Row-wise total null count
+    df['D_null_count'] = df[existing_d].isnull().sum(axis=1).astype(np.int8)
+    
+    # 2. Individual is_null indicators
+    for col in existing_d:
+        df[f'{col}_is_null'] = df[col].isnull().astype(np.int8)
+        
+    return df
+
+def create_d_ratio_and_diff(df, pairs=None):
+    """
+    Creates ratio and difference features between D columns to capture relative time gaps.
+    """
+    if pairs is None:
+        pairs = [('D1', 'D2'), ('D2', 'D3'), ('D1', 'D4'), ('D10', 'D15')]
+    
+    df = df.copy()
+    for col1, col2 in pairs:
+        if col1 in df.columns and col2 in df.columns:
+            # Ratio: Relative difference (avoid division by zero)
+            df[f'{col1}_{col2}_ratio'] = df[col1] / (df[col2] + 1e-5)
+            # Diff: Absolute time gap
+            df[f'{col1}_{col2}_diff'] = df[col1] - df[col2]
+            
+    return df
+
 def normalize_d_columns(df, d_cols=None):
     """
     Normalize D columns by subtracting from TransactionDay.
@@ -419,34 +456,12 @@ def create_uid(df, uid_cols=['card1', 'addr1', 'D1']):
     df['uid'] = df[uid_cols].astype(str).agg('_'.join, axis=1)
     return df
 
-# 4. UID-based Aggregations
+
+# Replace your function with this:
 def create_uid_aggregations(df, uid_col='uid', agg_features=None, agg_maps=None):
     """
-    Create aggregation features based on UID.
-    Each UID represents a unique client's behavior pattern.
-    
-    Train/Test Safe Implementation:
-        - On train (agg_maps=None): Compute and store aggregation statistics
-        - On test (agg_maps provided): Apply pre-computed statistics via mapping
-    
-    This prevents data leakage by ensuring test aggregations come from train statistics.
-    UIDs not seen in train will get NaN (can be filled with global mean later).
-    
-    Reference:
-        This approach follows the standard practice of fitting transformations on 
-        training data only, as described in:
-        - Kuhn & Johnson (2013). Applied Predictive Modeling. Springer.
-        - Zheng & Casari (2018). Feature Engineering for Machine Learning. O'Reilly.
-    
-    Args:
-        df: DataFrame
-        uid_col: Column containing unique identifiers
-        agg_features: List of features to aggregate (default: transaction-related features)
-        agg_maps: Dict of pre-computed aggregation mappings from train (for test data)
-    
-    Returns:
-        df: DataFrame with aggregation features
-        agg_maps: Dictionary containing {feature: {uid: (mean, std)}} mappings
+    UID tabanlı toplulaştırma özellikleri oluşturur.
+    İşlem tutarının grup ortalamasına oranı (Magic Feature) eklenmiştir.
     """
     if agg_features is None:
         agg_features = ['TransactionAmt', 'D2', 'D15', 'C1', 'C9', 'C11', 'C13']
@@ -463,7 +478,7 @@ def create_uid_aggregations(df, uid_col='uid', agg_features=None, agg_maps=None)
         std_col = f'{feat}_{uid_col}_std'
         
         if is_train:
-            # Compute aggregations on train data
+            # TRAIN: İstatistikleri hesapla ve sakla
             agg_stats = df.groupby(uid_col)[feat].agg(['mean', 'std'])
             agg_maps[feat] = {
                 'mean_map': agg_stats['mean'].to_dict(),
@@ -474,15 +489,88 @@ def create_uid_aggregations(df, uid_col='uid', agg_features=None, agg_maps=None)
             df[mean_col] = df.groupby(uid_col)[feat].transform('mean')
             df[std_col] = df.groupby(uid_col)[feat].transform('std')
         else:
-            # Apply pre-computed mappings to test data
+            # TEST: Train'den gelen haritaları uygula
             df[mean_col] = df[uid_col].map(agg_maps[feat]['mean_map'])
             df[std_col] = df[uid_col].map(agg_maps[feat]['std_map'])
             
-            # Fill unseen UIDs with global statistics from train
+            # Yeni görülen UID'leri Train genel ortalaması ile doldur (Data Leakage Önlemi)
             df[mean_col] = df[mean_col].fillna(agg_maps[feat]['global_mean'])
             df[std_col] = df[std_col].fillna(agg_maps[feat]['global_std'])
+
+    # MAGIC FEATURE: İşlem tutarının o kullanıcının ortalamasına oranı
+    # Bu özellik döngünün dışında hesaplanmalı çünkü sadece 'TransactionAmt' için geçerli.
+    mean_amt_col = f'TransactionAmt_{uid_col}_mean'
+    if mean_amt_col in df.columns:
+        df['Amt_to_mean_uid'] = df['TransactionAmt'] / (df[mean_amt_col] + 1e-5)
+        
+    return df, agg_maps
+
+
+# # 4. UID-based Aggregations
+# def create_uid_aggregations(df, uid_col='uid', agg_features=None, agg_maps=None):
+#     """
+#     Create aggregation features based on UID.
+#     Each UID represents a unique client's behavior pattern.
     
-    return df, agg_maps 
+#     Train/Test Safe Implementation:
+#         - On train (agg_maps=None): Compute and store aggregation statistics
+#         - On test (agg_maps provided): Apply pre-computed statistics via mapping
+    
+#     This prevents data leakage by ensuring test aggregations come from train statistics.
+#     UIDs not seen in train will get NaN (can be filled with global mean later).
+    
+#     Reference:
+#         This approach follows the standard practice of fitting transformations on 
+#         training data only, as described in:
+#         - Kuhn & Johnson (2013). Applied Predictive Modeling. Springer.
+#         - Zheng & Casari (2018). Feature Engineering for Machine Learning. O'Reilly.
+    
+#     Args:
+#         df: DataFrame
+#         uid_col: Column containing unique identifiers
+#         agg_features: List of features to aggregate (default: transaction-related features)
+#         agg_maps: Dict of pre-computed aggregation mappings from train (for test data)
+    
+#     Returns:
+#         df: DataFrame with aggregation features
+#         agg_maps: Dictionary containing {feature: {uid: (mean, std)}} mappings
+#     """
+#     if agg_features is None:
+#         agg_features = ['TransactionAmt', 'D2', 'D15', 'C1', 'C9', 'C11', 'C13']
+    
+#     is_train = agg_maps is None
+#     if is_train:
+#         agg_maps = {}
+    
+#     for feat in agg_features:
+#         if feat not in df.columns:
+#             continue
+        
+#         mean_col = f'{feat}_{uid_col}_mean'
+#         std_col = f'{feat}_{uid_col}_std'
+        
+#         if is_train:
+#             # Compute aggregations on train data
+#             agg_stats = df.groupby(uid_col)[feat].agg(['mean', 'std'])
+#             agg_maps[feat] = {
+#                 'mean_map': agg_stats['mean'].to_dict(),
+#                 'std_map': agg_stats['std'].to_dict(),
+#                 'global_mean': df[feat].mean(),
+#                 'global_std': df[feat].std()
+#             }
+#             df[mean_col] = df.groupby(uid_col)[feat].transform('mean')
+#             df[std_col] = df.groupby(uid_col)[feat].transform('std')
+#         else:
+#             # Apply pre-computed mappings to test data
+#             df[mean_col] = df[uid_col].map(agg_maps[feat]['mean_map'])
+#             df[std_col] = df[uid_col].map(agg_maps[feat]['std_map'])
+            
+#             # Fill unseen UIDs with global statistics from train
+#             df[mean_col] = df[mean_col].fillna(agg_maps[feat]['global_mean'])
+#             df[std_col] = df[std_col].fillna(agg_maps[feat]['global_std'])
+    
+#     return df, agg_maps 
+
 
 # 5. C-Column Velocity Features
 def create_c_velocity_features(df):
