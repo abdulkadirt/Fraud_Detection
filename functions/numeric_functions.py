@@ -420,20 +420,69 @@ def create_uid(df, uid_cols=['card1', 'addr1', 'D1']):
     return df
 
 # 4. UID-based Aggregations
-def create_uid_aggregations(df, uid_col='uid', agg_features=None):
+def create_uid_aggregations(df, uid_col='uid', agg_features=None, agg_maps=None):
     """
     Create aggregation features based on UID.
     Each UID represents a unique client's behavior pattern.
+    
+    Train/Test Safe Implementation:
+        - On train (agg_maps=None): Compute and store aggregation statistics
+        - On test (agg_maps provided): Apply pre-computed statistics via mapping
+    
+    This prevents data leakage by ensuring test aggregations come from train statistics.
+    UIDs not seen in train will get NaN (can be filled with global mean later).
+    
+    Reference:
+        This approach follows the standard practice of fitting transformations on 
+        training data only, as described in:
+        - Kuhn & Johnson (2013). Applied Predictive Modeling. Springer.
+        - Zheng & Casari (2018). Feature Engineering for Machine Learning. O'Reilly.
+    
+    Args:
+        df: DataFrame
+        uid_col: Column containing unique identifiers
+        agg_features: List of features to aggregate (default: transaction-related features)
+        agg_maps: Dict of pre-computed aggregation mappings from train (for test data)
+    
+    Returns:
+        df: DataFrame with aggregation features
+        agg_maps: Dictionary containing {feature: {uid: (mean, std)}} mappings
     """
     if agg_features is None:
-        agg_features = ['TransactionAmt', 'D2', 'D15', 'C1', 'C9', 'C11', 'C13', 'M5', 'M9']
+        agg_features = ['TransactionAmt', 'D2', 'D15', 'C1', 'C9', 'C11', 'C13']
+    
+    is_train = agg_maps is None
+    if is_train:
+        agg_maps = {}
     
     for feat in agg_features:
-        if feat in df.columns:
-            df[f'{feat}_{uid_col}_mean'] = df.groupby(uid_col)[feat].transform('mean')
-            df[f'{feat}_{uid_col}_std'] = df.groupby(uid_col)[feat].transform('std')
+        if feat not in df.columns:
+            continue
+        
+        mean_col = f'{feat}_{uid_col}_mean'
+        std_col = f'{feat}_{uid_col}_std'
+        
+        if is_train:
+            # Compute aggregations on train data
+            agg_stats = df.groupby(uid_col)[feat].agg(['mean', 'std'])
+            agg_maps[feat] = {
+                'mean_map': agg_stats['mean'].to_dict(),
+                'std_map': agg_stats['std'].to_dict(),
+                'global_mean': df[feat].mean(),
+                'global_std': df[feat].std()
+            }
+            df[mean_col] = df.groupby(uid_col)[feat].transform('mean')
+            df[std_col] = df.groupby(uid_col)[feat].transform('std')
+        else:
+            # Apply pre-computed mappings to test data
+            df[mean_col] = df[uid_col].map(agg_maps[feat]['mean_map'])
+            df[std_col] = df[uid_col].map(agg_maps[feat]['std_map'])
+            
+            # Fill unseen UIDs with global statistics from train
+            df[mean_col] = df[mean_col].fillna(agg_maps[feat]['global_mean'])
+            df[std_col] = df[std_col].fillna(agg_maps[feat]['global_std'])
     
-    return df 
+    return df, agg_maps 
 
 # 5. C-Column Velocity Features
 def create_c_velocity_features(df):
@@ -450,7 +499,149 @@ def create_c_velocity_features(df):
     return df
 
 
+# 6. Feature Evaluation
+def test_single_feature(df, feature, target='isFraud'):
+    """
+    Quick AUC test for evaluating a single feature's predictive power.
+    
+    Uses a simple LightGBM model with train/validation split to estimate
+    how well a single feature can predict the target variable.
+    
+    Note: This is a quick sanity check, not a rigorous evaluation.
+    For proper feature importance, use cross-validation or permutation importance.
+    
+    Args:
+        df: DataFrame containing the feature and target
+        feature: Name of the feature to test
+        target: Name of the target column (default 'isFraud')
+    
+    Returns:
+        float: ROC-AUC score on validation set
+    """
+    from sklearn.metrics import roc_auc_score
+    from sklearn.model_selection import train_test_split
+    from lightgbm import LGBMClassifier
+    
+    valid_data = df[[feature, target]].dropna()
+    X_train, X_val, y_train, y_val = train_test_split(
+        valid_data[[feature]], valid_data[target], 
+        test_size=0.3, random_state=42, stratify=valid_data[target]
+    )
+    
+    model = LGBMClassifier(n_estimators=100, random_state=42, verbose=-1)
+    model.fit(X_train, y_train)
+    
+    pred = model.predict_proba(X_val)[:, 1]
+    auc = roc_auc_score(y_val, pred)
+    
+    return auc
 
+
+# 7. Correlation-based Feature Selection
+def remove_high_correlation(df, features, ks_results_df, threshold=0.95):
+    """
+    Remove highly correlated features while preserving discriminative power.
+    
+    Method:
+    -------
+    When two features have correlation > threshold, keep the one with higher
+    KS statistic (better fraud/normal separation). This is a target-aware
+    feature selection method performed ONLY on training data.
+    
+    Academic Justification:
+    ----------------------
+    Using target information for feature selection on training data is standard
+    practice in supervised learning, as long as:
+    1. Selection is done ONLY on training fold (not test/validation)
+    2. The same selected features are applied to test data
+    
+    References:
+    - Guyon, I. & Elisseeff, A. (2003). "An Introduction to Variable and Feature 
+      Selection". JMLR 3:1157-1182.
+    - Chandrashekar, G. & Sahin, F. (2014). "A Survey on Feature Selection Methods". 
+      Computers & Electrical Engineering.
+    
+    Args:
+        df: DataFrame (training data)
+        features: List of features to check for correlation
+        ks_results_df: DataFrame with KS test results (Feature, Test_Stat columns)
+        threshold: Correlation threshold (default 0.95)
+    
+    Returns:
+        List of features to keep after removing highly correlated ones
+    """
+    # Build KS lookup dictionary for efficiency
+    ks_lookup = dict(zip(ks_results_df['Feature'], ks_results_df['Test_Stat']))
+    
+    # Filter features that exist in both df and ks_results
+    valid_features = [f for f in features if f in df.columns and f in ks_lookup]
+    
+    if len(valid_features) == 0:
+        print("Warning: No valid features found for correlation analysis")
+        return features
+    
+    corr_matrix = df[valid_features].corr().abs()
+    
+    # Upper triangle to avoid duplicates
+    upper = corr_matrix.where(
+        np.triu(np.ones(corr_matrix.shape), k=1).astype(bool)
+    )
+    
+    to_drop = set()
+    
+    for column in upper.columns:
+        correlated = upper[column][upper[column] > threshold].index.tolist()
+        if correlated:
+            for corr_col in correlated:
+                ks_col = ks_lookup.get(column, 0)
+                ks_corr = ks_lookup.get(corr_col, 0)
+                
+                # Keep the feature with higher KS statistic
+                if ks_col < ks_corr:
+                    to_drop.add(column)
+                else:
+                    to_drop.add(corr_col)
+    
+    print(f"Removing {len(to_drop)} highly correlated features (r > {threshold})")
+    print(f"Dropped features: {list(to_drop)[:10]}{'...' if len(to_drop) > 10 else ''}")
+    
+    return [f for f in valid_features if f not in to_drop]
+
+
+# 8. Outlier Handling
+def cap_outliers(df, columns, lower_percentile=1, upper_percentile=99):
+    """
+    Cap extreme outliers at specified percentiles (Winsorization).
+    
+    Method:
+    -------
+    Values below the lower percentile are set to the lower percentile value.
+    Values above the upper percentile are set to the upper percentile value.
+    
+    This is a robust method that preserves the distribution shape while
+    reducing the influence of extreme values on model training.
+    
+    Reference:
+    - Hastie, T., Tibshirani, R., & Friedman, J. (2009). "The Elements of 
+      Statistical Learning". Springer. Section 9.6 on robust methods.
+    
+    Args:
+        df: DataFrame
+        columns: List of columns to cap
+        lower_percentile: Lower bound percentile (default 1)
+        upper_percentile: Upper bound percentile (default 99)
+    
+    Returns:
+        DataFrame with capped values
+    """
+    df = df.copy()
+    for col in columns:
+        if col not in df.columns:
+            continue
+        lower = df[col].quantile(lower_percentile / 100)
+        upper = df[col].quantile(upper_percentile / 100)
+        df[col] = df[col].clip(lower, upper)
+    return df
 
 
 if __name__ == '__main__':
