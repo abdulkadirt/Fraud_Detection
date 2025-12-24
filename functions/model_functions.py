@@ -1,12 +1,3 @@
-"""
-Model Evaluation Functions for Fraud Detection
-===============================================
-Functions for model training, evaluation, and performance visualization.
-
-Author: Generated for IEEE-CIS Fraud Detection Project
-Date: December 2024
-"""
-
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt

@@ -414,6 +414,7 @@ def create_d_null_features(df, d_cols=None):
 def create_d_ratio_and_diff(df, pairs=None):
     """
     Creates ratio and difference features between D columns to capture relative time gaps.
+    Properly handles division by zero and replaces inf values with NaN.
     """
     if pairs is None:
         pairs = [('D1', 'D2'), ('D2', 'D3'), ('D1', 'D4'), ('D10', 'D15')]
@@ -421,8 +422,12 @@ def create_d_ratio_and_diff(df, pairs=None):
     df = df.copy()
     for col1, col2 in pairs:
         if col1 in df.columns and col2 in df.columns:
-            # Ratio: Relative difference (avoid division by zero)
-            df[f'{col1}_{col2}_ratio'] = df[col1] / (df[col2] + 1e-5)
+            # Ratio: Safe division - replace inf with NaN, then fill with median or 0
+            ratio = df[col1] / df[col2].replace(0, np.nan)
+            # Replace inf values with NaN
+            ratio = ratio.replace([np.inf, -np.inf], np.nan)
+            df[f'{col1}_{col2}_ratio'] = ratio
+            
             # Diff: Absolute time gap
             df[f'{col1}_{col2}_diff'] = df[col1] - df[col2]
             
