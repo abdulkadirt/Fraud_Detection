@@ -164,17 +164,6 @@ def test_feature_discrimination(df, columns, target='isFraud', test='ks',
         else:
             significance = 'ns'
         
-        # Decision logic  --> bu da gerekli olmayabilir yani okuyan kişiye bırakılması daha uygun olabilir.
-        if test == 'ks':
-            # KS: Higher D = better discrimination
-            if p < alpha and stat > 0.1:
-                decision = 'Keep'
-            else:
-                decision = 'Drop'
-        else:
-            # MW: Lower p = better
-            decision = 'Keep' if p < alpha else 'Drop'
-        
         results.append({
             'Feature': col,
             'Test_Stat': round(stat, 4),
@@ -184,7 +173,6 @@ def test_feature_discrimination(df, columns, target='isFraud', test='ks',
             'n_normal': n_normal,
             'Unique_Ratio_Fraud': round(unique_ratio_fraud, 3),
             'Unique_Ratio_Normal': round(unique_ratio_normal, 3),
-            'Decision': decision
         })
     
     # Convert to DataFrame and sort
@@ -356,48 +344,6 @@ def plot_boxplot_comparison(df, columns, target='isFraud', figsize=(18, 5)):
 
 # v_cols
 def group_by_missing_pattern(df, columns):
-
-    """
-    Groups columns that share the exact same missing-value pattern.
-
-    Concept:
-        Two columns belong to the same group if they have NaN in exactly 
-        the same rows. High-dimensional datasets like IEEE-CIS V-features 
-        often contain engineered feature blocks derived from the same source, 
-        resulting in identical missing masks.
-
-    Args:
-        df (DataFrame): Input dataset
-        columns (list): Columns to analyze (e.g., V1–V339)
-
-    Returns:
-        dict: pattern_id → { 'columns', 'size', 'missing_rate' }
-    """
-
-    missing_patterns = {}
-
-    for col in columns:
-        pattern = tuple(df[col].isnull().values)
-
-        if pattern not in missing_patterns:
-            missing_patterns[pattern] = []
-
-        missing_patterns[pattern].append(col)
-
-    pattern_groups = {}
-
-    for pattern_id, (pattern, cols) in enumerate(missing_patterns.items(), start=1):
-        missing_rate = sum(pattern) / len(pattern)
-
-        pattern_groups[pattern_id] = {
-            'columns': cols,
-            'size': len(cols),
-            'missing_rate': missing_rate
-        }
-
-    return pattern_groups
-
-def group_by_missing_pattern(df, columns):
     """
     Groups columns that share the exact same missing-value pattern.
 
@@ -439,6 +385,69 @@ def group_by_missing_pattern(df, columns):
     return pattern_groups
 
 
+# 1. Time Engineering
+def convert_dt_to_day(df):
+    """Convert TransactionDT from seconds to days."""
+    df['TransactionDay'] = df['TransactionDT'] / 86400
+    return df
+
+def normalize_d_columns(df, d_cols=None):
+    """
+    Normalize D columns by subtracting from TransactionDay.
+    This anchors each timedelta to the transaction timestamp.
+    """
+    if d_cols is None:
+        d_cols = [f'D{i}' for i in range(1, 16)]
+    
+    for col in d_cols:
+        if col in df.columns:
+            df[f'{col}_normalized'] = df['TransactionDay'] - df[col]
+    return df
+
+# 2. Transaction Amount Engineering
+def extract_amt_decimal(df):
+    """Extract decimal part (cents) from TransactionAmt."""
+    df['TransactionAmt_decimal'] = df['TransactionAmt'] % 1
+    df['TransactionAmt_cents'] = (df['TransactionAmt'] % 1 * 100).astype(int)
+    return df
+
+# 3. UID Creation --> direkt modele verme, overfit e sebep olabilir kullanıcı özelinde bilgiler bunlar.
+def create_uid(df, uid_cols=['card1', 'addr1', 'D1']):
+    """
+    Create unique client identifier by combining card1, addr1, D1.
+    """
+    df['uid'] = df[uid_cols].astype(str).agg('_'.join, axis=1)
+    return df
+
+# 4. UID-based Aggregations
+def create_uid_aggregations(df, uid_col='uid', agg_features=None):
+    """
+    Create aggregation features based on UID.
+    Each UID represents a unique client's behavior pattern.
+    """
+    if agg_features is None:
+        agg_features = ['TransactionAmt', 'D2', 'D15', 'C1', 'C9', 'C11', 'C13', 'M5', 'M9']
+    
+    for feat in agg_features:
+        if feat in df.columns:
+            df[f'{feat}_{uid_col}_mean'] = df.groupby(uid_col)[feat].transform('mean')
+            df[f'{feat}_{uid_col}_std'] = df.groupby(uid_col)[feat].transform('std')
+    
+    return df 
+
+# 5. C-Column Velocity Features
+def create_c_velocity_features(df):
+    """
+    C columns represent counts. Ratios capture transaction velocity.
+    Example: C13/C1 = total operations / time since first operation
+    """
+    if 'C1' in df.columns and 'C13' in df.columns:
+        df['C13_C1_ratio'] = df['C13'] / (df['C1'] + 1)
+    
+    if 'C1' in df.columns and 'C2' in df.columns:
+        df['C2_C1_ratio'] = df['C2'] / (df['C1'] + 1)
+    
+    return df
 
 
 
