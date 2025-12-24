@@ -204,195 +204,80 @@ def cat_binary_test(df, feature_list, target='isFraud', alpha=0.05, min_category
 
 
 # Encoding 
-def apply_label_encoding(df, columns, encoder_dict=None, handle_unknown='use_default'):
-    """
-    Apply Label Encoding - for ordinal or binary categorical variables
-    
-    Parameters:
-    -----------
-    df : DataFrame
-        Data to be encoded
-    columns : list
-        Column names to encode
-    encoder_dict : dict, optional
-        Pre-fitted encoders (for test data)
-        If None, creates new encoders (for train data)
-    handle_unknown : str, default='use_default'
-        How to handle new categories in test set?
-        'use_default': Assigns -1
-        'error': Raises error
-    
-    Returns:
-    --------
-    df_encoded : DataFrame
-        Encoded data
-    encoder_dict : dict
-        Encoder object for each column
-    
-    Example Usage:
-    ---------------
-    # Train
-    df_train, encoders = apply_label_encoding(df_train, ['ProductCD', 'card4'])
-    
-    # Test
-    df_test, _ = apply_label_encoding(df_test, ['ProductCD', 'card4'], 
-                                      encoder_dict=encoders)
-    """
+def apply_label_encoding(df, columns, encoder_dict=None):
+    """Apply Label Encoding to specified columns."""
     df_encoded = df.copy()
-    
-    # Create new encoder (train) or use existing one (test)
-    if encoder_dict is None:
+    is_training = encoder_dict is None
+    if is_training:
         encoder_dict = {}
-        is_training = True
-    else:
-        is_training = False
     
     for col in columns:
         if col not in df.columns:
-            print(f"Warning: Column '{col}' not found in dataframe, skipped.")
             continue
-        
+            
         if is_training:
-            # Train: Create and fit new encoder
             le = LabelEncoder()
             df_encoded[col] = le.fit_transform(df[col].astype(str))
             encoder_dict[col] = le
-            # print(f"Encoded '{col}': {len(le.classes_)} unique values")
         else:
-            # Test: Use existing encoder
             le = encoder_dict[col]
-            
-            # Handle new categories
-            if handle_unknown == 'use_default':
-                # Encode known categories, assign -1 to unknown ones
-                known_mask = df[col].astype(str).isin(le.classes_)
-                df_encoded.loc[known_mask, col] = le.transform(
-                    df.loc[known_mask, col].astype(str)
-                )
-                df_encoded.loc[~known_mask, col] = -1
-                
-                unknown_count = (~known_mask).sum()
-                if unknown_count > 0:
-                    print(f"Warning: '{col}' has {unknown_count} new categories, assigned -1")
-            else:
-                # Raise error
-                df_encoded[col] = le.transform(df[col].astype(str))
+            known = df[col].astype(str).isin(le.classes_)
+            df_encoded.loc[known, col] = le.transform(df.loc[known, col].astype(str))
+            df_encoded.loc[~known, col] = -1
     
     return df_encoded, encoder_dict
 
-def apply_frequency_encoding(df, columns, freq_dict=None, normalize=False, 
-                             handle_unknown='zero'):
-    """
-    Apply Frequency Encoding - replaces categories with their frequency counts
-    
-    Parameters:
-    -----------
-    df : DataFrame
-        Data to be encoded
-    columns : list
-        Column names to encode
-    freq_dict : dict, optional
-        Pre-computed frequency mappings (for test data)
-        If None, computes from current data (for train data)
-    normalize : bool, default=False
-        If True, returns relative frequency (percentage)
-        If False, returns absolute count
-    handle_unknown : str, default='zero'
-        How to handle new categories in test set?
-        'zero': Assigns 0
-        'min': Assigns minimum frequency from train
-        'mean': Assigns mean frequency from train
-    
-    Returns:
-    --------
-    df_encoded : DataFrame
-        Encoded data
-    freq_dict : dict
-        Frequency mapping for each column
-    
-    Example Usage:
-    ---------------
-    # Train
-    df_train, freq_maps = apply_frequency_encoding(df_train, ['card1', 'addr1'])
-    
-    # Test
-    df_test, _ = apply_frequency_encoding(df_test, ['card1', 'addr1'], 
-                                          freq_dict=freq_maps)
-    
-    Notes:
-    ------
-    - Simple but effective for high cardinality features
-    - Works well with tree-based models
-    - Can capture popularity/rarity of categories
-    - No dimensionality increase (1 column -> 1 column)
-    """
+def apply_frequency_encoding(df, columns, freq_dict=None, normalize=False):
+    """Replace categories with their frequency counts."""
     df_encoded = df.copy()
-    
-    # Create new freq_dict (train) or use existing one (test)
-    if freq_dict is None:
+    is_training = freq_dict is None
+    if is_training:
         freq_dict = {}
-        is_training = True
-    else:
-        is_training = False
     
     for col in columns:
         if col not in df.columns:
-            print(f"Warning: Column '{col}' not found in dataframe, skipped.")
             continue
-        
+            
         if is_training:
-            # Train: Compute frequency mapping
-            value_counts = df[col].value_counts()
-            
-            if normalize:
-                # Relative frequency (percentage)
-                freq_map = (value_counts / len(df)).to_dict()
-            else:
-                # Absolute count
-                freq_map = value_counts.to_dict()
-            
+            counts = df[col].value_counts(normalize=normalize)
             freq_dict[col] = {
-                'mapping': freq_map,
-                'min_freq': min(freq_map.values()),
-                'mean_freq': np.mean(list(freq_map.values()))
+                'map': counts.to_dict(),
+                'default': counts.min() if len(counts) > 0 else 0
             }
-            
-            # Apply encoding
-            df_encoded[col] = df[col].map(freq_map)
-            
-            # print(f"Encoded '{col}': {len(freq_map)} unique values")
-            # print(f"  Frequency range: {min(freq_map.values()):.4f} - {max(freq_map.values()):.4f}")
-        else:
-            # Test: Use existing frequency mapping
-            freq_map = freq_dict[col]['mapping']
-            min_freq = freq_dict[col]['min_freq']
-            mean_freq = freq_dict[col]['mean_freq']
-            
-            # Map values
-            df_encoded[col] = df[col].map(freq_map)
-            
-            # Handle unknown categories
-            unknown_mask = df_encoded[col].isna()
-            unknown_count = unknown_mask.sum()
-            
-            if unknown_count > 0:
-                if handle_unknown == 'zero':
-                    df_encoded.loc[unknown_mask, col] = 0
-                elif handle_unknown == 'min':
-                    df_encoded.loc[unknown_mask, col] = min_freq
-                elif handle_unknown == 'mean':
-                    df_encoded.loc[unknown_mask, col] = mean_freq
-                
-                print(f"Warning: '{col}' has {unknown_count} unknown categories")
-                print(f"  Assigned value: {handle_unknown}")
+        
+        df_encoded[col] = df[col].map(freq_dict[col]['map']).fillna(freq_dict[col]['default'])
     
     return df_encoded, freq_dict
 
-
-
-
 # feature engineering functions
 
+# 1. Rare category encoding (reusable) --> car3 ve card5 te kullanılacak.
+def encode_rare_categories(df, columns, thresh = 200, rare_maps=None):
+    """
+    Replace rare categories with 'Others'.
+    
+    Args:
+        columns: dict {col: threshold} or list
+        rare_maps: dict {col: [rare_values]} for test set
+    """
+    is_train = rare_maps is None
+    if is_train:
+        rare_maps = {}
+    
+    if isinstance(columns, list):
+        columns = {col: 200 for col in columns}
+    
+    for col, thresh in columns.items():
+        if col not in df.columns:
+            continue
+            
+        if is_train:
+            counts = df[col].value_counts()
+            rare_maps[col] = counts[counts < thresh].index.tolist()
+        
+        df.loc[df[col].isin(rare_maps[col]), col] = 'Others'
+    
+    return df, rare_maps
 
 def clean_email_domains(df):
     """
@@ -486,62 +371,22 @@ def consolidate_device_info(df):
     return df
 
 
-def analyze_screen_resolution(df):
-    """
-    Parse screen resolution from id_33 column and analyze fraud patterns.
-
-    Args:
-        df (DataFrame): Input dataframe
-    """
-    df_res = df.copy()
-
-    if 'id_33' not in df_res.columns:
-        print("id_33 column not found")
-        return
-
-    resolution_split = df_res['id_33'].astype(str).str.split('x', expand=True)
-    if resolution_split.shape[1] == 2:
-        df_res['screen_width'] = pd.to_numeric(resolution_split[0], errors='coerce')
-        df_res['screen_height'] = pd.to_numeric(resolution_split[1], errors='coerce')
-        df_res['total_pixels'] = df_res['screen_width'] * df_res['screen_height']
-
-        top_resolutions = df_res['id_33'].value_counts().head(15).index
-        df_plot = df_res[df_res['id_33'].isin(top_resolutions)]
-
-
-        plt.figure(figsize=(16, 8))
-        res_summary = df_plot.groupby('id_33')['isFraud'].agg(['mean', 'count']).reset_index()
-        res_summary['mean'] = res_summary['mean'] * 100
-        res_summary = res_summary.sort_values(by='mean', ascending=False)
-
-        ax = sns.barplot(
-            data=res_summary,
-            x='id_33',
-            y='mean',
-            palette='pastel',
-            edgecolor='white'
-        )
-
-        for p, count in zip(ax.patches, res_summary['count']):
-            ax.text(
-                p.get_x() + p.get_width() / 2.,
-                p.get_height() + 0.2,
-                f"N={count}\n({p.get_height():.1f}%)",
-                ha="center",
-                fontsize=10,
-                color='black',
-                weight='bold'
-            )
-
-        plt.title('Fraud Risk by Most Common Screen Resolutions', fontsize=16)
-        plt.ylabel('Fraud Rate (%)', fontsize=12)
-        plt.xlabel('Screen Resolution', fontsize=12)
-        plt.xticks(rotation=45)
-        plt.grid(axis='y', linestyle='--', alpha=0.5)
-        plt.tight_layout()
-        plt.show()
-    else:
-        print("id_33 format not as expected (should be WxH format)")
+#  Screen resolution features
+def extract_screen_features(df):
+    """Parse id_33 into width, height, pixels, aspect ratio."""
+    if 'id_33' not in df.columns:
+        return df
+    
+    split = df['id_33'].astype(str).str.split('x', expand=True)
+    if split.shape[1] != 2:
+        return df
+    
+    df['screen_width'] = pd.to_numeric(split[0], errors='coerce')
+    df['screen_height'] = pd.to_numeric(split[1], errors='coerce')
+    df['total_pixels'] = df['screen_width'] * df['screen_height']
+    df['aspect_ratio'] = (df['screen_width'] / df['screen_height']).round(2)
+    
+    return df
 
 
 def bivariate_comb_risk(df, feature1, feature2, target='isFraud', min_samples=30, show_bar_chart=False):
@@ -727,60 +572,29 @@ def scan_all_bivariate_combinations(df, feature_list, target='isFraud',
 
     return results_df.head(top_n)
 
-def create_interaction_features_auto(df, top_combos_df, top_n=10, min_fraud_rate=25.0):
+def create_interaction_features(df, interactions, prefix='inter'):
     """
-    Automatically creates new features from the riskiest combinations.
-
-    Parameters:
-    -----------
-    df : DataFrame
-        Dataset to add new features to
-    top_combos_df : DataFrame
-        Output of scan_all_bivariate_combinations() function
-    top_n : int, default=10
-        Number of combinations to use
-    min_fraud_rate : float, default=25.0
-        Minimum fraud rate threshold (%)
-
+    Create interaction features from predefined column pairs.
+    Safe for train/test - no data leakage.
+    
+    Args:
+        df: DataFrame
+        interactions: list of tuples [(col1, col2), ...]
+        prefix: prefix for new feature names
+    
     Returns:
-    --------
-    df : DataFrame
-        Dataset with new interaction features added
+        df with new interaction columns
     """
-
-    # Filter: Only select high-risk combinations
-    risky_combos = top_combos_df[
-        top_combos_df['fraud_rate'] >= min_fraud_rate
-    ].head(top_n)
-
-    if len(risky_combos) == 0:
-        print("No combination exceeds the threshold value!")
-        return df
-
-    created_features = []
-
-    for idx, row in risky_combos.iterrows():
-        feat1 = row['feature1']
-        feat2 = row['feature2']
-        fraud_rate = row['fraud_rate']
-
-        # New feature name
-        new_feature_name = f"{feat1}_x_{feat2}"
-
-        # If features exist in the dataset, combine them
-        if feat1 in df.columns and feat2 in df.columns:
-            df[new_feature_name] = (
-                df[feat1].astype(str).fillna('missing') + '_' +
-                df[feat2].astype(str).fillna('missing')
+    df = df.copy()
+    
+    for col1, col2 in interactions:
+        if col1 in df.columns and col2 in df.columns:
+            new_name = f"{prefix}_{col1}_x_{col2}"
+            df[new_name] = (
+                df[col1].astype(str).fillna('missing') + '_' + 
+                df[col2].astype(str).fillna('missing')
             )
-            created_features.append(new_feature_name)
-
-            print(f" {new_feature_name:<40} | Fraud Rate: {fraud_rate:>6.2f}%")
-        else:
-            print(f" {feat1} or {feat2} not found, skipping...")
-
-    df.created_interaction_features = created_features
-
+    
     return df
 
 
