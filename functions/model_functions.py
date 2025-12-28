@@ -650,12 +650,7 @@ def compare_models(y_true: np.ndarray,
     
     comparison_df = pd.DataFrame(results)
     comparison_df = comparison_df.sort_values('ROC-AUC', ascending=False).reset_index(drop=True)
-    
-    # Display with highlighting
-    print("\n" + "="*80)
-    print("MODEL COMPARISON SUMMARY")
-    print("="*80)
-    
+        
     return comparison_df
 
 

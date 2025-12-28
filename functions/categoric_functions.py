@@ -132,7 +132,13 @@ def reduce_mem_usage(df, verbose=True):
     return df
 
 
-def cat_binary_test(df, feature_list, target='isFraud', alpha=0.05, min_category_size=30):
+def cat_binary_test(
+    df: pd.DataFrame,
+    feature_list: list[str],
+    target: str = "isFraud",
+    alpha: float = 0.05,
+    min_category_size: int = 30,
+) -> pd.DataFrame:
     """
     Perform statistical hypothesis testing for categorical features with binary target.
 
@@ -146,61 +152,183 @@ def cat_binary_test(df, feature_list, target='isFraud', alpha=0.05, min_category
     Returns:
         DataFrame: Test results with statistical significance and practical importance
     """
-    results = []
+
+    df = df.copy()
+
+    # --- HARD NORMALIZATION (do not trust caller) ---
+    df[target] = pd.to_numeric(df[target], errors="coerce").astype("float64")
+
+    results: list[dict] = []
 
     for feature in feature_list:
         if feature not in df.columns:
             continue
 
-        rates = df.groupby(feature)[target].mean()
-        counts = df.groupby(feature)[target].count()
+        try:
+            # Work only with required columns
+            sub = df[[feature, target]].dropna()
 
-        if len(rates) < 2:
-            continue
+            if sub.empty:
+                raise ValueError("No valid rows after dropna")
 
-        rate_diff = rates.max() - rates.min()
-        overall_rate = df[target].mean()
+            # Explicit groupby (avoids pandas bugs)
+            gb = sub.groupby(feature, observed=True)
 
-        contingency = pd.crosstab(df[feature], df[target])
-        chi2, p_value, dof, expected = chi2_contingency(contingency)
+            rates = gb[target].mean()
+            counts = gb[target].size()
 
-        warning = f"Low sample size ({counts.min()})" if counts.min() < min_category_size else ""
+            if len(rates) < 2:
+                continue
 
-        stat_sig = p_value < alpha
-        strong_practical = rate_diff >= 0.02
-        medium_practical = rate_diff >= 0.01
+            rate_diff = float(rates.max() - rates.min())
+            overall_rate = float(sub[target].mean())
 
-        if stat_sig and strong_practical:
-            decision = "Strong Relation"
-            keep = True
-        elif stat_sig and medium_practical:
-            decision = "Enough Relation"
-            keep = True
-        elif stat_sig:
-            decision = "Poor but Meaningful"
-            keep = False
-        else:
-            decision = "Not Related"
-            keep = False
+            contingency = pd.crosstab(sub[feature], sub[target])
 
-        results.append({
-            'Feature': feature,
-            'P_Value': round(p_value, 6),
-            'Fraud_Rate_Min': round(rates.min(), 4),
-            'Fraud_Rate_Max': round(rates.max(), 4),
-            'Rate_Diff': round(rate_diff, 4),
-            'Overall_Fraud_Rate': round(overall_rate, 4),
-            'N_Categories': len(rates),
-            'Min_Category_Size': int(counts.min()),
-            'Decision': decision,
-            'Keep': keep,
-            'Warning': warning
-        })
+            # Guard against degenerate tables
+            if contingency.shape[1] < 2:
+                raise ValueError("Contingency table has <2 target classes")
+
+            chi2, p_value, dof, expected = chi2_contingency(contingency)
+
+            warning = (
+                f"Low sample size ({counts.min()})"
+                if counts.min() < min_category_size
+                else ""
+            )
+
+            stat_sig = p_value < alpha
+            strong_practical = rate_diff >= 0.02
+            medium_practical = rate_diff >= 0.01
+
+            if stat_sig and strong_practical:
+                decision = "Strong Relation"
+                keep = True
+            elif stat_sig and medium_practical:
+                decision = "Enough Relation"
+                keep = True
+            elif stat_sig:
+                decision = "Poor but Meaningful"
+                keep = False
+            else:
+                decision = "Not Related"
+                keep = False
+
+            results.append(
+                {
+                    "Feature": feature,
+                    "P_Value": round(float(p_value), 6),
+                    "Fraud_Rate_Min": round(float(rates.min()), 4),
+                    "Fraud_Rate_Max": round(float(rates.max()), 4),
+                    "Rate_Diff": round(rate_diff, 4),
+                    "Overall_Fraud_Rate": round(overall_rate, 4),
+                    "N_Categories": int(len(rates)),
+                    "Min_Category_Size": int(counts.min()),
+                    "Decision": decision,
+                    "Keep": keep,
+                    "Warning": warning,
+                }
+            )
+
+        except Exception as e:
+            # Feature-level fuse: never crash the whole run
+            results.append(
+                {
+                    "Feature": feature,
+                    "P_Value": None,
+                    "Fraud_Rate_Min": None,
+                    "Fraud_Rate_Max": None,
+                    "Rate_Diff": None,
+                    "Overall_Fraud_Rate": None,
+                    "N_Categories": None,
+                    "Min_Category_Size": None,
+                    "Decision": "ERROR",
+                    "Keep": False,
+                    "Warning": str(e),
+                }
+            )
+
+    if not results:
+        return pd.DataFrame()
 
     results_df = pd.DataFrame(results)
-    results_df = results_df.sort_values('Rate_Diff', ascending=False).reset_index(drop=True)
+
+    if "Rate_Diff" in results_df.columns:
+        results_df = results_df.sort_values(
+            "Rate_Diff", ascending=False, na_position="last"
+        ).reset_index(drop=True)
 
     return results_df
+
+# def cat_binary_test(df, feature_list, target='isFraud', alpha=0.05, min_category_size=30):
+#     """
+#     Perform statistical hypothesis testing for categorical features with binary target.
+
+#     Args:
+#         df (DataFrame): Input dataframe
+#         feature_list (list): List of features to test
+#         target (str): Binary target variable name
+#         alpha (float): Significance level
+#         min_category_size (int): Minimum sample size per category
+
+#     Returns:
+#         DataFrame: Test results with statistical significance and practical importance
+#     """
+#     results = []
+
+#     for feature in feature_list:
+#         if feature not in df.columns:
+#             continue
+
+#         rates = df.groupby(feature)[target].mean()
+#         counts = df.groupby(feature)[target].count()
+
+#         if len(rates) < 2:
+#             continue
+
+#         rate_diff = rates.max() - rates.min()
+#         overall_rate = df[target].mean()
+
+#         contingency = pd.crosstab(df[feature], df[target])
+#         chi2, p_value, dof, expected = chi2_contingency(contingency)
+
+#         warning = f"Low sample size ({counts.min()})" if counts.min() < min_category_size else ""
+
+#         stat_sig = p_value < alpha
+#         strong_practical = rate_diff >= 0.02
+#         medium_practical = rate_diff >= 0.01
+
+#         if stat_sig and strong_practical:
+#             decision = "Strong Relation"
+#             keep = True
+#         elif stat_sig and medium_practical:
+#             decision = "Enough Relation"
+#             keep = True
+#         elif stat_sig:
+#             decision = "Poor but Meaningful"
+#             keep = False
+#         else:
+#             decision = "Not Related"
+#             keep = False
+
+#         results.append({
+#             'Feature': feature,
+#             'P_Value': round(p_value, 6),
+#             'Fraud_Rate_Min': round(rates.min(), 4),
+#             'Fraud_Rate_Max': round(rates.max(), 4),
+#             'Rate_Diff': round(rate_diff, 4),
+#             'Overall_Fraud_Rate': round(overall_rate, 4),
+#             'N_Categories': len(rates),
+#             'Min_Category_Size': int(counts.min()),
+#             'Decision': decision,
+#             'Keep': keep,
+#             'Warning': warning
+#         })
+
+#     results_df = pd.DataFrame(results)
+#     results_df = results_df.sort_values('Rate_Diff', ascending=False).reset_index(drop=True)
+
+#     return results_df
 
 
 # Encoding 
