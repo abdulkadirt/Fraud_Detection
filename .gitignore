@@ -9,3 +9,7 @@ __pycache__/
 
 notebooks\
 kaggle_submission.ipynb
+
+
+results\
+results_by_scenerio.xlsx
