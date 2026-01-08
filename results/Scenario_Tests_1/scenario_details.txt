@@ -1,0 +1,110 @@
+================================================================================
+SCENARIO TESTS 1 - Experiment Documentation
+================================================================================
+Date: January 2026
+Purpose: Systematic comparison of feature engineering and missing value strategies
+Method: Class weighting only (No SMOTE)
+
+================================================================================
+EVALUATION PROTOCOL (Fixed for All Scenarios)
+================================================================================
+- Cross-Validation: StratifiedKFold, n_splits=3, shuffle=True, random_state=42
+- Metrics Collected:
+  * CV ROC-AUC (mean ± std)
+  * Test ROC-AUC
+  * Test PR-AUC (Average Precision)
+  * Youden's J optimal threshold
+  * Precision, Recall, F1 at optimal threshold
+
+================================================================================
+BASE MODELS (4)
+================================================================================
+1. RandomForest
+   - n_estimators=200, max_depth=15, class_weight='balanced'
+   
+2. XGBoost
+   - n_estimators=300, max_depth=6, learning_rate=0.05
+   - scale_pos_weight for class imbalance
+   
+3. LightGBM
+   - n_estimators=300, max_depth=8, learning_rate=0.05
+   - is_unbalance=True
+   
+4. CatBoost
+   - iterations=300, depth=6, learning_rate=0.05
+   - auto_class_weights='Balanced'
+
+================================================================================
+STACKING VARIANTS (3)
+================================================================================
+5. Stacking_Weighted
+   - Weighted average based on CV-AUC scores of base models
+   
+6. Stacking_Logistic
+   - LogisticRegression meta-learner trained on OOF predictions
+   - C=1.0, class_weight='balanced'
+   
+7. Stacking_Ridge
+   - L2-regularized LogisticRegression (Ridge-like)
+   - C=0.1, stronger regularization
+
+================================================================================
+SCENARIO DESCRIPTIONS
+================================================================================
+
+SCENARIO 1: Baseline (Control)
+------------------------------
+- Missing Strategy: Sentinel (-999)
+- Feature Set: Full filtered_features (175 features)
+- Purpose: Establish baseline performance with all engineered features
+- Hypothesis: Full feature set with sentinel encoding provides robust baseline
+
+SCENARIO 2: NaN Strategy
+------------------------------
+- Missing Strategy: Keep NaN values (native model handling)
+- Feature Set: Full filtered_features (175 features)
+- Purpose: Compare sentinel vs native NaN handling
+- Notes: 
+  * LightGBM, XGBoost, CatBoost handle NaN natively
+  * RandomForest wrapped with SimpleImputer(strategy='median')
+- Hypothesis: Native NaN handling may preserve information better
+
+SCENARIO 3: No Interaction Features
+------------------------------
+- Missing Strategy: Sentinel (-999)
+- Feature Set: Excluding features starting with 'inter_'
+- Purpose: Feature ablation study - assess interaction feature value
+- Hypothesis: Interaction features add marginal improvement
+
+SCENARIO 4: Strong Features Only
+------------------------------
+- Missing Strategy: Sentinel (-999)
+- Feature Set: strong_features + strong_cat (from EDA analysis)
+- Purpose: Aggressive feature reduction using only high-signal features
+- Criteria: Features with KS statistic > 0.15 or AUC > 0.55
+- Hypothesis: Strong features alone may match full set with less noise
+
+SCENARIO 5: Strong + Moderate Features
+------------------------------
+- Missing Strategy: Sentinel (-999)
+- Feature Set: strong + moderate features (numerical + categorical)
+- Purpose: Balanced feature reduction
+- Criteria: Features with KS > 0.10 or AUC > 0.52
+- Hypothesis: Adding moderate features improves over strong-only
+
+================================================================================
+OUTPUT FILES
+================================================================================
+- results_master.csv: All results in flat CSV format (35 rows: 5 scenarios × 7 approaches)
+- results_by_scenario.xlsx: Excel workbook with separate sheet per scenario
+
+================================================================================
+KEY FINDINGS (To be filled after execution)
+================================================================================
+[Run the notebook and record findings here]
+
+Best Overall Model: [TBD]
+Best Scenario: [TBD]
+Stacking Improvement: [TBD]
+
+================================================================================

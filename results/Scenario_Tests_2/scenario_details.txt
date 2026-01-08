@@ -1,0 +1,39 @@
+Scenario Tests 2 - Experiment Documentation
+================================================
+
+Purpose: Creative scenarios to highlight different model strengths
+
+ENSEMBLE METHODS
+----------------
+1. Stacking_Weighted: CV-AUC weighted average of base models
+2. Stacking_MLP: Neural network meta-learner (16,8 hidden layers)
+3. Stacking_Blend: Holdout-based blending with LogisticRegression
+4. Rank_Average: Calibration-free rank averaging
+
+SCENARIOS
+---------
+Scenario 1: Raw Data Baseline
+- No feature engineering, minimal preprocessing
+- Purpose: Establish "before" state
+
+Scenario 2: High Cardinality Categorical
+- Raw categoricals with minimal encoding
+- Purpose: Test native categorical handling
+
+Scenario 3: Numerical Only
+- No categorical features
+- Purpose: Test pure numerical optimization
+
+Scenario 4: Amnesiac System
+- No C/D/V columns (historical data)
+- Purpose: Prove value of data engineering
+- Story: Real-time fraud detection without database access
+
+Scenario 5: Top 40 Features
+- Top features by LightGBM importance
+- Purpose: Test generalization with limited features
+
+EVALUATION
+----------
+- CV: StratifiedKFold, n_splits=3, shuffle=True, random_state=42
+- Metrics: CV AUC, Test AUC, Test AP, Youden threshold, Precision/Recall/F1
